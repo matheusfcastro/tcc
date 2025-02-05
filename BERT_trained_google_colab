@@ -1,0 +1,123 @@
+!pip install transformers datasets torch scikit-learn
+
+from google.colab import files
+uploaded = files.upload()
+
+import pandas as pd
+import torch
+from transformers import AutoTokenizer
+
+# Load dataset
+file_path = "processed_gdpr_dataset.xlsx"  # Make sure to upload it first
+df = pd.read_excel(file_path)
+
+# Load Legal-BERT tokenizer
+tokenizer = AutoTokenizer.from_pretrained("nlpaueb/legal-bert-base-uncased")
+
+# Tokenize text
+encodings = tokenizer(df["cleaned_text"].tolist(), truncation=True, padding=True, max_length=512, return_tensors="pt")
+
+# Convert labels to tensors
+labels = torch.tensor(df["label_encoded"].tolist())
+
+# Train-test split
+from sklearn.model_selection import train_test_split
+train_inputs, val_inputs, train_labels, val_labels = train_test_split(
+    encodings["input_ids"], labels, test_size=0.2, random_state=42
+)
+
+from transformers import AutoModelForSequenceClassification, Trainer, TrainingArguments
+from datasets import Dataset
+import numpy as np
+from sklearn.metrics import accuracy_score, f1_score
+
+# Load Legal-BERT model
+model = AutoModelForSequenceClassification.from_pretrained(
+    "nlpaueb/legal-bert-base-uncased", num_labels=len(df["label_encoded"].unique())
+)
+
+# Convert data to Hugging Face Dataset format
+train_dataset = Dataset.from_dict({"input_ids": train_inputs.tolist(), "label": train_labels.tolist()})
+val_dataset = Dataset.from_dict({"input_ids": val_inputs.tolist(), "label": val_labels.tolist()})
+
+# Define Training Arguments
+training_args = TrainingArguments(
+    output_dir="./results",
+    evaluation_strategy="epoch",
+    save_strategy="epoch",
+    num_train_epochs=5,
+    per_device_train_batch_size=16,
+    per_device_eval_batch_size=16,
+    learning_rate=2e-5,
+    weight_decay=0.01,
+    logging_dir="./logs",
+)
+
+# Define Evaluation Metrics
+def compute_metrics(eval_pred):
+    predictions, labels = eval_pred
+    preds = np.argmax(predictions, axis=1)
+    return {
+        "accuracy": accuracy_score(labels, preds),
+        "f1": f1_score(labels, preds, average="weighted"),
+    }
+
+# Initialize Trainer
+trainer = Trainer(
+    model=model,
+    args=training_args,
+    train_dataset=train_dataset,
+    eval_dataset=val_dataset,
+    compute_metrics=compute_metrics,
+)
+
+# Start Training
+trainer.train()
+
+model.save_pretrained("fine_tuned_legal_bert")
+tokenizer.save_pretrained("fine_tuned_legal_bert")
+
+# Zip the model for download
+!zip -r fine_tuned_legal_bert.zip fine_tuned_legal_bert
+
+# Provide a link for downloading
+from google.colab import files
+files.download("fine_tuned_legal_bert.zip")
+
+from transformers import pipeline
+
+# Load Fine-Tuned Model
+model_path = "fine_tuned_legal_bert"
+classifier = pipeline("text-classification", model=model_path, tokenizer=model_path)
+
+# Classify a new GDPR NDA clause
+text = "A company processes personal data without a clear legal basis, violating GDPR Article 6."
+result = classifier(text)
+
+print(result)
+
+import json
+
+# Load label mappings from training
+label_mapping = {i: label for i, label in enumerate(df["label"].unique())}
+
+# Print mapping for verification
+print(label_mapping)
+
+from transformers import pipeline
+
+# Load Fine-Tuned Model
+model_path = "fine_tuned_legal_bert"
+classifier = pipeline("text-classification", model=model_path, tokenizer=model_path)
+
+# Classify a new GDPR NDA clause
+text = "4. Direitos do titular dos dados 1 O Processador compromete-se, na medida do possível, a cooperar e fornecer total assistência a fim de ajudar o Controlador a responder às solicitações dos titulares dos dados no que se refere ao exercício de seus direitos.  2 Sobretudo, o Processador compromete-se a (i) comunicar imediatamente ao Controlador qualquer solicitação recebida pelos titulares dos dados sobre o exercício de seus direitos e, se viável e apropriado, (ii) permitir que o Controlador projete e implemente todas as medidas técnicas e organizacionais necessárias para responder às solicitações dos titulares dos dados. 3 Não obstante o fato de o Controlador ser responsável por responder às solicitações dos titulares dos dados, o Processador pode aceitar ser encarregado pelo cumprimento de algumas solicitações específicas, desde que tais funções não exijam esforços desproporcionais do Processador e que os Controladores forneçam instruções detalhadas por escrito."
+result = classifier(text)
+
+# Convert label index to category name
+predicted_label = int(result[0]['label'].replace("LABEL_", ""))
+gdpr_category = label_mapping.get(predicted_label, "Unknown Category")
+
+# Print the final result
+print(f"Predicted GDPR Category: {gdpr_category} (Confidence: {result[0]['score']:.2f})")
+
