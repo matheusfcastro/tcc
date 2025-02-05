@@ -1,0 +1,79 @@
+!pip install transformers torch pdfplumber pandas reportlab
+
+from google.colab import files
+
+uploaded = files.upload()  # Isso abrirá um prompt para selecionar arquivos
+
+import pdfplumber
+
+def extract_text_from_pdf(file_path):
+    with pdfplumber.open(file_path) as pdf:
+        text = "\n".join([page.extract_text() for page in pdf.pages if page.extract_text()])
+    return text
+
+# Nome dos arquivos enviados
+contract_compliant_pdf = "contract_in_compliance.pdf"
+contract_non_compliant_pdf = "contract_not_in_compliance.pdf"
+
+# Extrair texto dos PDFs
+contract_compliant_text = extract_text_from_pdf(contract_compliant_pdf)
+contract_non_compliant_text = extract_text_from_pdf(contract_non_compliant_pdf)
+
+from transformers import AutoModelForSequenceClassification, AutoTokenizer
+import torch
+
+model_name = "nlpaueb/legal-bert-base-uncased"
+tokenizer = AutoTokenizer.from_pretrained(model_name)
+model = AutoModelForSequenceClassification.from_pretrained(model_name, num_labels=2)  # Binário: Compliance / Non-Compliance
+
+def evaluate_compliance(text):
+    inputs = tokenizer(text, return_tensors="pt", padding=True, truncation=True, max_length=512)
+    with torch.no_grad():
+        outputs = model(**inputs)
+    scores = torch.softmax(outputs.logits, dim=1)
+    compliance_score = scores[0][1].item()  # Probabilidade de estar em conformidade
+    return compliance_score
+
+criteria = [
+    ("Definição clara de 'dados pessoais' conforme GDPR", ["dados pessoais", "GDPR Art. 4(1)"]),
+    ("Definição de termos como 'controlador', 'operador' e 'titular'", ["definições", "GDPR Art. 4"]),
+    ("Base legal clara e justificada para o processamento de dados", ["base legal", "GDPR Art. 6"]),
+    ("Princípios de minimização e limitação de uso de dados garantidos", ["minimização de dados", "GDPR Art. 5(1)(c)"]),
+    ("Medidas de segurança técnica e organizacional previstas", ["segurança", "GDPR Art. 32"]),
+    ("Transferência internacional de dados alinhada às regras da GDPR", ["transferência de dados", "GDPR Arts. 44-49"]),
+    ("Períodos de retenção e obrigações de exclusão de dados definidos", ["retenção de dados", "GDPR Art. 5(1)(e)"]),
+    ("Obrigações de notificação de violações de dados estabelecidas", ["violação de dados", "GDPR Arts. 33-34"]),
+    ("Direitos dos titulares de dados garantidos e operacionalizados", ["acesso a dados", "GDPR Arts. 12-22"]),
+    ("Auditorias e inspeções para verificação de conformidade permitidas", ["auditoria", "GDPR Art. 28(3)(h)"]),
+    ("Cláusulas de responsabilidade e indenizações por não conformidade", ["responsabilidade", "GDPR Art. 82"]),
+    ("Cláusulas de confidencialidade para funcionários e terceiros", ["confidencialidade", "GDPR Art. 28(3)"]),
+    ("Regras para subprocessadores e terceiros claramente definidas", ["subprocessadores", "GDPR Art. 28(2)"]),
+    ("Registro de atividades de processamento exigido quando aplicável", ["registro de atividades", "GDPR Art. 30"]),
+    ("Avaliação de Impacto sobre a Proteção de Dados (DPIA) exigida se necessário", ["DPIA", "GDPR Art. 35"]),
+    ("Sanções e consequências para descumprimento da GDPR estabelecidas", ["sanções", "GDPR Art. 83"]),
+    ("Definição clara da legislação aplicável e jurisdição", ["jurisdição", "GDPR e leis nacionais"]),
+    ("Uso de técnicas de anonimização ou pseudonimização incentivado", ["anonimização", "GDPR Art. 25"]),
+    ("Obrigações de cooperação com autoridades de proteção de dados previstas", ["cooperação regulatória", "GDPR Art. 31"])
+]
+
+def check_compliance(text, criteria):
+    results = []
+    for crit, keywords in criteria:
+        compliance = any(keyword.lower() in text.lower() for keyword in keywords)
+        results.append("✅" if compliance else "🚨")
+    return results
+
+import pandas as pd
+
+compliant_results = check_compliance(contract_compliant_text, criteria)
+non_compliant_results = check_compliance(contract_non_compliant_text, criteria)
+
+# Criar DataFrame com os resultados
+df_results = pd.DataFrame({
+    "Critério": [c[0] for c in criteria],
+    "Contrato 1": compliant_results,
+    "Contrato 2": non_compliant_results
+})
+
+# Exibir relatório
+df_results
